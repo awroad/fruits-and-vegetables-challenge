@@ -1,19 +1,56 @@
 #!/usr/bin/env php
 <?php
+/**
+ * Universal PHPUnit wrapper for PHPUnit 9/10/11 and Symfony PHPUnit Bridge.
+ *
+ * - Prefers symfony/phpunit-bridge (simple-phpunit) if available
+ * - Falls back to PHPUnit 10/11 (TextUI\Application)
+ * - Falls back to PHPUnit 9 (TextUI\Command)
+ * - Final fallback: executes vendor/bin/phpunit directly
+ */
 
 if (!ini_get('date.timezone')) {
     ini_set('date.timezone', 'UTC');
 }
 
-if (is_file(dirname(__DIR__).'/vendor/phpunit/phpunit/phpunit')) {
-    define('PHPUNIT_COMPOSER_INSTALL', dirname(__DIR__).'/vendor/autoload.php');
-    require PHPUNIT_COMPOSER_INSTALL;
-    PHPUnit\TextUI\Command::main();
-} else {
-    if (!is_file(dirname(__DIR__).'/vendor/symfony/phpunit-bridge/bin/simple-phpunit.php')) {
-        echo "Unable to find the `simple-phpunit.php` script in `vendor/symfony/phpunit-bridge/bin/`.\n";
-        exit(1);
-    }
+$root     = dirname(__DIR__);
+$vendor   = $root . '/vendor';
+$autoload = $vendor . '/autoload.php';
+$argv     = $_SERVER['argv'] ?? [];
 
-    require dirname(__DIR__).'/vendor/symfony/phpunit-bridge/bin/simple-phpunit.php';
+if (is_file($autoload)) {
+    require $autoload;
 }
+
+// 1) Symfony PHPUnit Bridge (preferred)
+$bridge = $vendor . '/symfony/phpunit-bridge/bin/simple-phpunit.php';
+if (is_file($bridge)) {
+    require $bridge; // runs the bridge runner and terminates the process
+    exit(0);         // just in case
+}
+
+// 2) PHPUnit 10/11: Application runner
+if (class_exists(\PHPUnit\TextUI\Application::class)) {
+    $app = new \PHPUnit\TextUI\Application();
+    // PHPUnit 10/11 expect argv array; run() returns an exit code
+    $exitCode = $app->run($argv);
+    exit((int)$exitCode);
+}
+
+// 3) PHPUnit 9: classic Command runner
+if (class_exists(\PHPUnit\TextUI\Command::class)) {
+    // false = do not exit in main(), but return the exit code instead
+    $exitCode = \PHPUnit\TextUI\Command::main(false);
+    exit((int)$exitCode);
+}
+
+// 4) Final fallback: delegate to the Composer-installed binary
+$binary = $root . '/vendor/bin/phpunit';
+if (is_file($binary) && is_executable($binary)) {
+    $cmd = escapeshellarg($binary) . ' ' . implode(' ', array_map('escapeshellarg', array_slice($argv, 1)));
+    passthru($cmd, $code);
+    exit((int)$code);
+}
+
+fwrite(STDERR, "Unable to locate a compatible PHPUnit runner. Install either symfony/phpunit-bridge or phpunit/phpunit.\n");
+exit(1);
